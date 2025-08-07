@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Mini Music Widget</title>
+  <style>
+    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
+
+    body {
+      background: #f5f5f5;
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      letter-spacing: -0.8px;
+    }
+
+    .mini-widget {
+      width: 320px;
+      height: 60px;
+      background: #fff;
+      border: 2px solid #ddd;
+      border-radius: 30px;
+      padding: 8px 20px;
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      position: relative;
+    }
+
+    .song-info {
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-width: 0;
+    }
+
+    .song-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #333;
+      margin: 0 0 2px 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .artist {
+      font-size: 11px;
+      color: #888;
+      margin: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn {
+      width: 28px;
+      height: 28px;
+      border: none;
+      border-radius: 50%;
+      background: #f5f5f5;
+      color: #666;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .btn:hover {
+      background: #e8e8e8;
+    }
+
+    .btn.play {
+      background: #333;
+      color: white;
+      width: 32px;
+      height: 32px;
+      font-size: 14px;
+    }
+
+    .btn.play:hover {
+      background: #555;
+    }
+
+    .progress-container {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: #eee;
+      border-radius: 0 0 28px 28px;
+      overflow: hidden;
+      cursor: pointer;
+    }
+
+    .progress {
+      height: 100%;
+      background: #666;
+      width: 0%;
+      transition: width 0.1s;
+      position: relative;
+    }
+
+    .progress-heart {
+      position: absolute;
+      right: -6px;
+      top: -4px;
+      color: #ff6b6b;
+      font-size: 12px;
+      transform: translateY(-50%);
+    }
+
+    .youtube-player {
+      position: fixed;
+      top: -9999px;
+      left: -9999px;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="mini-widget">
+    <div class="song-info">
+      <div class="song-title" id="songTitle">YouTube Music</div>
+      <div class="artist" id="artist">Click play to start</div>
+    </div>
+    <div class="controls">
+      <button class="btn" id="prevBtn">⏮</button>
+      <button class="btn play" id="playBtn">▶</button>
+      <button class="btn" id="nextBtn">⏭</button>
+    </div>
+    <div class="progress-container" id="progressContainer">
+      <div class="progress" id="progress">
+        <div class="progress-heart">♥</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- YouTube Player -->
+  <div id="youtubePlayer" class="youtube-player"></div>
+
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script>
+    let player;
+    let isPlaying = false;
+    let currentVideoId = '';
+    let progressInterval;
+    let isDragging = false;
+    let playlist = [];
+    let currentSongIndex = 0;
+
+    const playBtn = document.getElementById('playBtn');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const progress = document.getElementById('progress');
+    const progressContainer = document.getElementById('progressContainer');
+    const songTitle = document.getElementById('songTitle');
+    const artist = document.getElementById('artist');
+
+    // URL에서 플레이리스트 가져오기
+    function getPlaylistFromURL() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const playlist = [];
+      
+      // video1, video2, video3... 형태로 여러 곡 지원
+      let i = 1;
+      while (urlParams.get(`video${i}`) || urlParams.get(`video`) && i === 1) {
+        const videoUrl = urlParams.get(`video${i}`) || urlParams.get(`video`);
+        const title = urlParams.get(`title${i}`) || urlParams.get(`title`) || `Song ${i}`;
+        const artist = urlParams.get(`artist${i}`) || urlParams.get(`artist`) || `Artist ${i}`;
+        
+        playlist.push({
+          videoUrl: videoUrl,
+          title: title,
+          artist: artist
+        });
+        
+        i++;
+      }
+      
+      return playlist;
+    }
+
+    // YouTube URL에서 Video ID 추출
+    function getVideoId(url) {
+      if (!url) return null;
+      
+      const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+        /youtube\.com\/watch\?.*v=([^&\n?#]+)/
+      ];
+      
+      for (let pattern of patterns) {
+        const match = url.match(pattern);
+        if (match) return match[1];
+      }
+      return null;
+    }
+
+    // 현재 곡 정보 업데이트
+    function updateCurrentSongInfo() {
+      if (playlist.length > 0 && currentSongIndex < playlist.length) {
+        const currentSong = playlist[currentSongIndex];
+        songTitle.textContent = currentSong.title;
+        artist.textContent = currentSong.artist;
+      }
+    }
+
+    // 다음 곡으로 이동
+    function nextSong() {
+      if (playlist.length > 1) {
+        currentSongIndex = (currentSongIndex + 1) % playlist.length;
+        loadCurrentSong();
+      } else if (player) {
+        // 단일 곡일 때는 30초 앞으로
+        player.seekTo(player.getCurrentTime() + 30, true);
+      }
+    }
+
+    // 이전 곡으로 이동
+    function prevSong() {
+      if (playlist.length > 1) {
+        currentSongIndex = (currentSongIndex - 1 + playlist.length) % playlist.length;
+        loadCurrentSong();
+      } else if (player) {
+        // 단일 곡일 때는 30초 뒤로
+        player.seekTo(Math.max(0, player.getCurrentTime() - 30), true);
+      }
+    }
+
+    // 현재 곡 로드
+    function loadCurrentSong() {
+      if (playlist.length > 0 && currentSongIndex < playlist.length) {
+        const currentSong = playlist[currentSongIndex];
+        const videoId = getVideoId(currentSong.videoUrl);
+        
+        if (videoId) {
+          currentVideoId = videoId;
+          updateCurrentSongInfo();
+          
+          if (player) {
+            player.loadVideoById(videoId);
+          } else {
+            // 첫 번째 곡일 때 플레이어 생성
+            createPlayer(videoId);
+          }
+        }
+      }
+    }
+
+    // 플레이어 생성
+    function createPlayer(videoId) {
+      player = new YT.Player('youtubePlayer', {
+        height: '1',
+        width: '1',
+        videoId: videoId,
+        playerVars: {
+          'autoplay': 0,
+          'controls': 0,
+          'disablekb': 1,
+          'fs': 0,
+          'rel': 0,
+          'showinfo': 0,
+          'modestbranding': 1
+        },
+        events: {
+          'onReady': onPlayerReady,
+          'onStateChange': onPlayerStateChange
+        }
+      });
+    }
+
+    // YouTube Player API 준비
+    function onYouTubeIframeAPIReady() {
+      playlist = getPlaylistFromURL();
+      
+      if (playlist.length > 0) {
+        loadCurrentSong();
+      } else {
+        // 플레이리스트가 없을 때
+        songTitle.textContent = 'YouTube Music';
+        artist.textContent = 'Add ?video=YOUTUBE_URL to play';
+      }
+    }
+
+    function onPlayerReady(event) {
+      updateProgress();
+    }
+
+    function onPlayerStateChange(event) {
+      if (event.data == YT.PlayerState.PLAYING) {
+        isPlaying = true;
+        playBtn.textContent = '⏸';
+        startProgressUpdate();
+      } else if (event.data == YT.PlayerState.PAUSED) {
+        isPlaying = false;
+        playBtn.textContent = '▶';
+        stopProgressUpdate();
+      } else if (event.data == YT.PlayerState.ENDED) {
+        // 곡이 끝나면 다음 곡으로 자동 이동
+        if (playlist.length > 1) {
+          nextSong();
+        } else {
+          isPlaying = false;
+          playBtn.textContent = '▶';
+          stopProgressUpdate();
+          progress.style.width = '0%';
+        }
+      }
+    }
+
+    function startProgressUpdate() {
+      progressInterval = setInterval(() => {
+        if (player && player.getCurrentTime && player.getDuration && !isDragging) {
+          const currentTime = player.getCurrentTime();
+          const duration = player.getDuration();
+          const percentage = (currentTime / duration) * 100;
+          progress.style.width = percentage + '%';
+        }
+      }, 100);
+    }
+
+    function stopProgressUpdate() {
+      if (progressInterval) {
+        clearInterval(progressInterval);
+      }
+    }
+
+    function updateProgress() {
+      if (player && player.getCurrentTime && player.getDuration) {
+        const currentTime = player.getCurrentTime();
+        const duration = player.getDuration();
+        const percentage = (currentTime / duration) * 100;
+        progress.style.width = percentage + '%';
+      }
+    }
+
+    function seekTo(percentage) {
+      if (player && player.getDuration) {
+        const duration = player.getDuration();
+        const seekTime = (percentage / 100) * duration;
+        player.seekTo(seekTime, true);
+      }
+    }
+
+    function play() {
+      if (player && currentVideoId) {
+        player.playVideo();
+      } else {
+        songTitle.textContent = 'No video URL';
+        artist.textContent = 'Add ?video=YOUTUBE_URL';
+      }
+    }
+
+    function pause() {
+      if (player) {
+        player.pauseVideo();
+      }
+    }
+
+    // 재생바 드래그 이벤트
+    progressContainer.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      const rect = progressContainer.getBoundingClientRect();
+      const percentage = ((e.clientX - rect.left) / rect.width) * 100;
+      progress.style.width = percentage + '%';
+      seekTo(percentage);
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        const rect = progressContainer.getBoundingClientRect();
+        const percentage = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+        progress.style.width = percentage + '%';
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        const percentage = parseFloat(progress.style.width);
+        seekTo(percentage);
+      }
+    });
+
+    // 이벤트 리스너
+    playBtn.addEventListener('click', () => {
+      if (isPlaying) {
+        pause();
+      } else {
+        play();
+      }
+    });
+    
+    nextBtn.addEventListener('click', nextSong);
+    prevBtn.addEventListener('click', prevSong);
+
+    // 초기화
+    if (typeof YT !== 'undefined' && YT.Player) {
+      onYouTubeIframeAPIReady();
+    } else {
+      window.onYouTubeIframeAPIReady = onYouTubeIframeAPIReady;
+    }
+  </script>
+</body>
+</html>
